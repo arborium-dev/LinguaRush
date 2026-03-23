@@ -1,4 +1,4 @@
-racing game made for a french class.
+racing game made for hack club, modified for a french class.
 
 compile instructions:
 unity default build options should work
