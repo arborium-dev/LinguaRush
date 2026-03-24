@@ -26,6 +26,11 @@ public class Player : MonoBehaviour
     [Header("Stability")]
     [SerializeField] private float linearDrag = 1f;
 
+    [Header("Surface Penalties")]
+    [SerializeField] private string notDrivableTag = "notDrivable";
+    [SerializeField] private float notDrivableSpeedCap = 2.5f;
+    [SerializeField] private float notDrivableEntrySpeedMultiplier = 0.5f;
+
     private Rigidbody2D rb;
     private float throttleInput; // -1..1
     private float steerInput;    // -1..1
@@ -34,6 +39,7 @@ public class Player : MonoBehaviour
 
     private InputAction _moveAction;
     private InputAction _brakeAction;
+    private int _notDrivableContactCount;
 
     private void Awake()
     {
@@ -62,12 +68,63 @@ public class Player : MonoBehaviour
         ApplyEngineForce();
         ApplySteering();
         ApplyLateralGrip();
+        ApplySurfaceSpeedLimit();
+    }
+
+    private void OnTriggerEnter2D(Collider2D other)
+    {
+        UpdateNotDrivableContact(other, true);
+    }
+
+    private void OnTriggerExit2D(Collider2D other)
+    {
+        UpdateNotDrivableContact(other, false);
+    }
+
+    private void OnCollisionEnter2D(Collision2D collision)
+    {
+        UpdateNotDrivableContact(collision.collider, true);
+    }
+
+    private void OnCollisionExit2D(Collision2D collision)
+    {
+        UpdateNotDrivableContact(collision.collider, false);
+    }
+
+    private void OnDisable()
+    {
+        _notDrivableContactCount = 0;
+    }
+
+    private void UpdateNotDrivableContact(Collider2D other, bool entered)
+    {
+        if (other == null || !other.CompareTag(notDrivableTag))
+        {
+            return;
+        }
+
+        if (entered)
+        {
+            bool wasOnNotDrivable = _notDrivableContactCount > 0;
+            _notDrivableContactCount++;
+
+            if (!wasOnNotDrivable)
+            {
+                float speedMultiplier = Mathf.Clamp01(notDrivableEntrySpeedMultiplier);
+                rb.linearVelocity *= speedMultiplier;
+            }
+
+            return;
+        }
+
+        _notDrivableContactCount = Mathf.Max(0, _notDrivableContactCount - 1);
     }
 
     private void ApplyEngineForce()
     {
         Vector2 up = transform.up;
         float speedAlongForward = Vector2.Dot(rb.linearVelocity, up);
+        bool onNotDrivable = _notDrivableContactCount > 0;
 
         if (brakeInput)
         {
@@ -90,8 +147,11 @@ public class Player : MonoBehaviour
         float accel = throttleInput >= 0f ? acceleration : reverseAcceleration;
         rb.AddForce(up * (throttleInput * accel), ForceMode2D.Force);
 
+        float activeForwardCap = onNotDrivable ? Mathf.Min(maxForwardSpeed, notDrivableSpeedCap) : maxForwardSpeed;
+        float activeReverseCap = onNotDrivable ? Mathf.Min(maxReverseSpeed, notDrivableSpeedCap) : maxReverseSpeed;
+
         // Clamp forward/reverse speed along facing direction
-        float clamped = Mathf.Clamp(speedAlongForward, -maxReverseSpeed, maxForwardSpeed);
+        float clamped = Mathf.Clamp(speedAlongForward, -activeReverseCap, activeForwardCap);
         Vector2 forwardVel = up * clamped;
         Vector2 lateralVel = rb.linearVelocity - (up * speedAlongForward);
         rb.linearVelocity = forwardVel + lateralVel;
@@ -138,5 +198,17 @@ public class Player : MonoBehaviour
         sideways *= sideMultiplier;
 
         rb.linearVelocity = up * forward + right * sideways;
+    }
+
+    private void ApplySurfaceSpeedLimit()
+    {
+        if (_notDrivableContactCount <= 0)
+        {
+            return;
+        }
+
+        // Clamp total velocity so sideways drift cannot bypass the off-road speed cap.
+        float speedCap = Mathf.Max(0f, notDrivableSpeedCap);
+        rb.linearVelocity = Vector2.ClampMagnitude(rb.linearVelocity, speedCap);
     }
 }
