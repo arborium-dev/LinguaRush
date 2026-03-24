@@ -31,6 +31,10 @@ public class Player : MonoBehaviour
     [SerializeField] private float notDrivableSpeedCap = 2.5f;
     [SerializeField] private float notDrivableEntrySpeedMultiplier = 0.5f;
 
+    [Header("Lap Checkpoints")]
+    [SerializeField] private GameObject halfwayCheckpoint;
+    [SerializeField] private GameObject finishlineCheckpoint;
+
     private Rigidbody2D rb;
     private float throttleInput; // -1..1
     private float steerInput;    // -1..1
@@ -40,6 +44,7 @@ public class Player : MonoBehaviour
     private InputAction _moveAction;
     private InputAction _brakeAction;
     private int _notDrivableContactCount;
+    private bool _halfwayReachedThisLap;
 
     private void Awake()
     {
@@ -50,6 +55,11 @@ public class Player : MonoBehaviour
         
         _moveAction = InputSystem.actions.FindAction("Move");
         _brakeAction = InputSystem.actions.FindAction("Brake");
+
+        if (halfwayCheckpoint == null || finishlineCheckpoint == null)
+        {
+            Debug.LogWarning("Checkpoint GameObjects are not assigned on Player.", this);
+        }
     }
 
     private void Update()
@@ -74,6 +84,7 @@ public class Player : MonoBehaviour
     private void OnTriggerEnter2D(Collider2D other)
     {
         UpdateNotDrivableContact(other, true);
+        HandleCheckpointTrigger(other);
     }
 
     private void OnTriggerExit2D(Collider2D other)
@@ -91,9 +102,56 @@ public class Player : MonoBehaviour
         UpdateNotDrivableContact(collision.collider, false);
     }
 
+    private void HandleCheckpointTrigger(Collider2D other)
+    {
+        if (other == null)
+        {
+            return;
+        }
+
+        if (MatchesCheckpoint(other, halfwayCheckpoint))
+        {
+            _halfwayReachedThisLap = true;
+            Debug.Log("Halfway reached.", this);
+            return;
+        }
+
+        if (!MatchesCheckpoint(other, finishlineCheckpoint))
+        {
+            return;
+        }
+
+        bool goalIsValid = _halfwayReachedThisLap;
+        Debug.Log(goalIsValid
+            ? "Goal reached: VALID (halfway was hit first)."
+            : "Goal reached: INVALID (halfway was not hit yet).", this);
+
+        if (goalIsValid)
+        {
+            // Reset for the next lap cycle after a valid goal crossing.
+            _halfwayReachedThisLap = false;
+        }
+    }
+
+    private static bool MatchesCheckpoint(Collider2D other, GameObject checkpoint)
+    {
+        if (other == null || checkpoint == null)
+        {
+            return false;
+        }
+
+        Transform otherTransform = other.transform;
+        Transform checkpointTransform = checkpoint.transform;
+
+        return other.gameObject == checkpoint
+            || otherTransform.IsChildOf(checkpointTransform)
+            || checkpointTransform.IsChildOf(otherTransform);
+    }
+
     private void OnDisable()
     {
         _notDrivableContactCount = 0;
+        _halfwayReachedThisLap = false;
     }
 
     private void UpdateNotDrivableContact(Collider2D other, bool entered)
