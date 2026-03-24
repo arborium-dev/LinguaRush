@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using TMPro;
 
 [RequireComponent(typeof(Rigidbody2D))]
 public class Player : MonoBehaviour
@@ -35,6 +36,9 @@ public class Player : MonoBehaviour
     [SerializeField] private GameObject halfwayCheckpoint;
     [SerializeField] private GameObject finishlineCheckpoint;
 
+    [Header("Race Timer")]
+    [SerializeField] private TMP_Text raceTimerText;
+
     private Rigidbody2D rb;
     private float throttleInput; // -1..1
     private float steerInput;    // -1..1
@@ -45,6 +49,9 @@ public class Player : MonoBehaviour
     private InputAction _brakeAction;
     private int _notDrivableContactCount;
     private bool _halfwayReachedThisLap;
+    private bool _raceTimerStarted;
+    private bool _firstLapFinished;
+    private float _raceElapsedSeconds;
 
     private void Awake()
     {
@@ -60,6 +67,13 @@ public class Player : MonoBehaviour
         {
             Debug.LogWarning("Checkpoint GameObjects are not assigned on Player.", this);
         }
+
+        if (raceTimerText == null)
+        {
+            Debug.LogWarning("Race timer text is not assigned on Player.", this);
+        }
+
+        UpdateRaceTimerText();
     }
 
     private void Update()
@@ -71,6 +85,9 @@ public class Player : MonoBehaviour
         throttleInput = _moveAction.ReadValue<Vector2>().y;
         steerInput = _moveAction.ReadValue<Vector2>().x;
         brakeInput = _brakeAction.IsPressed();
+
+        TryStartRaceTimer();
+        TickRaceTimer();
     }
 
     private void FixedUpdate()
@@ -130,6 +147,7 @@ public class Player : MonoBehaviour
         {
             // Reset for the next lap cycle after a valid goal crossing.
             _halfwayReachedThisLap = false;
+            StopTimerOnFirstLapFinish();
         }
     }
 
@@ -148,10 +166,75 @@ public class Player : MonoBehaviour
             || checkpointTransform.IsChildOf(otherTransform);
     }
 
+    private void TryStartRaceTimer()
+    {
+        if (_raceTimerStarted || _firstLapFinished)
+        {
+            return;
+        }
+
+        bool hasInput = Mathf.Abs(throttleInput) > 0.01f
+            || Mathf.Abs(steerInput) > 0.01f
+            || brakeInput;
+
+        if (!hasInput)
+        {
+            return;
+        }
+
+        _raceTimerStarted = true;
+    }
+
+    private void TickRaceTimer()
+    {
+        if (!_raceTimerStarted || _firstLapFinished)
+        {
+            return;
+        }
+
+        _raceElapsedSeconds += Time.deltaTime;
+        UpdateRaceTimerText();
+    }
+
+    private void StopTimerOnFirstLapFinish()
+    {
+        if (_firstLapFinished)
+        {
+            return;
+        }
+
+        _firstLapFinished = true;
+        UpdateRaceTimerText();
+        Debug.Log($"First lap time: {FormatRaceTime(_raceElapsedSeconds)}", this);
+    }
+
+    private void UpdateRaceTimerText()
+    {
+        if (raceTimerText == null)
+        {
+            return;
+        }
+
+        raceTimerText.text = FormatRaceTime(_raceElapsedSeconds);
+    }
+
+    private static string FormatRaceTime(float seconds)
+    {
+        float clamped = Mathf.Max(0f, seconds);
+        int totalMilliseconds = Mathf.FloorToInt(clamped * 1000f);
+        int minutes = totalMilliseconds / 60000;
+        int secondsPart = (totalMilliseconds / 1000) % 60;
+        int milliseconds = totalMilliseconds % 1000;
+        return $"{minutes:00}:{secondsPart:00}:{milliseconds:000}";
+    }
+
     private void OnDisable()
     {
         _notDrivableContactCount = 0;
         _halfwayReachedThisLap = false;
+        _raceTimerStarted = false;
+        _firstLapFinished = false;
+        _raceElapsedSeconds = 0f;
     }
 
     private void UpdateNotDrivableContact(Collider2D other, bool entered)
