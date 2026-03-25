@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 using TMPro;
 
 [RequireComponent(typeof(Rigidbody2D))]
@@ -39,6 +40,19 @@ public class Player : MonoBehaviour
     [Header("Race Timer")]
     [SerializeField] private TMP_Text raceTimerText;
 
+    [Header("Lap Counter")]
+    [SerializeField] private TMP_Text lapCounterText;
+    private int _currentLap = 1;
+    private const int RequiredLaps = 3;
+
+    [Header("Car Visual")]
+    [SerializeField] private SpriteRenderer carSpriteRenderer;
+
+    [Header("Audio")]
+    [SerializeField] private AudioSource audioSource;
+    [SerializeField] private AudioClip finishRaceClip;
+    [SerializeField] private AudioSource musicAudioSource;
+
     private Rigidbody2D rb;
     private float throttleInput; // -1..1
     private float steerInput;    // -1..1
@@ -47,6 +61,8 @@ public class Player : MonoBehaviour
 
     private InputAction _moveAction;
     private InputAction _brakeAction;
+    private InputAction _quickRestartAction;
+    private InputAction _backAction;
     private int _notDrivableContactCount;
     private bool _halfwayReachedThisLap;
     private bool _raceTimerStarted;
@@ -59,9 +75,23 @@ public class Player : MonoBehaviour
         rb.gravityScale = 0f;
         rb.linearDamping = linearDrag;
         rb.angularDamping = 4f;
+
+        if (carSpriteRenderer == null)
+        {
+            carSpriteRenderer = GetComponent<SpriteRenderer>();
+        }
+
+        if (carSpriteRenderer == null)
+        {
+            carSpriteRenderer = GetComponentInChildren<SpriteRenderer>();
+        }
+
+        ApplySelectedCarSprite();
         
         _moveAction = InputSystem.actions.FindAction("Move");
         _brakeAction = InputSystem.actions.FindAction("Brake");
+        _quickRestartAction = InputSystem.actions.FindAction("QuickRestart");
+        _backAction = InputSystem.actions.FindAction("Back");
 
         if (halfwayCheckpoint == null || finishlineCheckpoint == null)
         {
@@ -73,11 +103,42 @@ public class Player : MonoBehaviour
             Debug.LogWarning("Race timer text is not assigned on Player.", this);
         }
 
+        if (lapCounterText == null)
+        {
+            Debug.LogWarning("Lap counter text is not assigned on Player.", this);
+        }
+
+        if (audioSource == null)
+        {
+            audioSource = GetComponent<AudioSource>();
+        }
+
         UpdateRaceTimerText();
+        UpdateLapCounterText();
     }
 
     private void Update()
     {
+        // Check for quick restart
+        if (_quickRestartAction != null && _quickRestartAction.WasPressedThisFrame())
+        {
+            QuickRestart();
+            return;
+        }
+
+        // Check for back/menu
+        if (_backAction != null && _backAction.WasPressedThisFrame())
+        {
+            BackToMenu();
+            return;
+        }
+
+        // Don't process input if race is finished
+        if (_firstLapFinished)
+        {
+            return;
+        }
+
         // Temporary classic input; swap to Input System later.
         // throttleInput = Input.GetAxisRaw("Vertical");
         // steerInput = Input.GetAxisRaw("Horizontal");
@@ -147,7 +208,7 @@ public class Player : MonoBehaviour
         {
             // Reset for the next lap cycle after a valid goal crossing.
             _halfwayReachedThisLap = false;
-            StopTimerOnFirstLapFinish();
+            HandleLapCompletion();
         }
     }
 
@@ -196,17 +257,6 @@ public class Player : MonoBehaviour
         UpdateRaceTimerText();
     }
 
-    private void StopTimerOnFirstLapFinish()
-    {
-        if (_firstLapFinished)
-        {
-            return;
-        }
-
-        _firstLapFinished = true;
-        UpdateRaceTimerText();
-        Debug.Log($"First lap time: {FormatRaceTime(_raceElapsedSeconds)}", this);
-    }
 
     private void UpdateRaceTimerText()
     {
@@ -216,6 +266,16 @@ public class Player : MonoBehaviour
         }
 
         raceTimerText.text = FormatRaceTime(_raceElapsedSeconds);
+    }
+
+    private void UpdateLapCounterText()
+    {
+        if (lapCounterText == null)
+        {
+            return;
+        }
+
+        lapCounterText.text = $"{_currentLap} / {RequiredLaps}";
     }
 
     private static string FormatRaceTime(float seconds)
@@ -351,5 +411,97 @@ public class Player : MonoBehaviour
         // Clamp total velocity so sideways drift cannot bypass the off-road speed cap.
         float speedCap = Mathf.Max(0f, notDrivableSpeedCap);
         rb.linearVelocity = Vector2.ClampMagnitude(rb.linearVelocity, speedCap);
+    }
+
+    private void ApplySelectedCarSprite()
+    {
+        if (carSpriteRenderer == null)
+        {
+            Debug.LogWarning("Player SpriteRenderer is not assigned/found, cannot apply selected car sprite.", this);
+            return;
+        }
+
+        if (!SelectionState.TryGetSelectedCountry(out var selectedCountry))
+        {
+            return;
+        }
+
+        string spritePath = selectedCountry switch
+        {
+            "Belgium" => "Art/belgium",
+            "France" => "Art/fr",
+            "Luxembourg" => "Art/lux",
+            _ => null
+        };
+
+        if (string.IsNullOrEmpty(spritePath))
+        {
+            Debug.LogWarning($"No sprite mapping exists for selected country '{selectedCountry}'.", this);
+            return;
+        }
+
+        var sprite = Resources.Load<Sprite>(spritePath);
+        if (sprite == null)
+        {
+            Debug.LogWarning($"Sprite not found at Resources/{spritePath}", this);
+            return;
+        }
+
+        carSpriteRenderer.sprite = sprite;
+    }
+
+    private void HandleLapCompletion()
+    {
+        _currentLap++;
+        UpdateLapCounterText();
+
+        if (_currentLap > RequiredLaps)
+        {
+            FinishRace();
+        }
+    }
+
+    private void FinishRace()
+    {
+        _raceTimerStarted = false;
+        _firstLapFinished = true;
+        UpdateRaceTimerText();
+        
+        // Disable player input
+        throttleInput = 0f;
+        steerInput = 0f;
+        brakeInput = false;
+        rb.linearVelocity = Vector2.zero;
+        
+        // Stop background music
+        if (musicAudioSource != null && musicAudioSource.isPlaying)
+        {
+            musicAudioSource.Stop();
+        }
+        
+        // Play finish sound
+        if (audioSource != null && finishRaceClip != null)
+        {
+            audioSource.PlayOneShot(finishRaceClip);
+        }
+        else if (finishRaceClip == null)
+        {
+            Debug.LogWarning("Finish race clip is not assigned on Player.", this);
+        }
+        
+        Debug.Log($"Race finished in {FormatRaceTime(_raceElapsedSeconds)}!", this);
+    }
+
+    private void QuickRestart()
+    {
+        Debug.Log("Quick restart triggered.", this);
+        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+    }
+
+    private void BackToMenu()
+    {
+        Debug.Log("Back to menu triggered.", this);
+        SelectionState.ClearSelectedCountry();
+        SceneManager.LoadScene("Menu");
     }
 }
